@@ -6,9 +6,6 @@ spoof), and — only if that check passes — matched against a small
 local registry of enrolled users. Access is granted only when both
 checks succeed.
 
-**Status: 11 of 14 stages complete** (project structure through a
-dedicated error-handling audit). Remaining: code-quality pass and
-final integration testing.
 
 ---
 
