@@ -1,0 +1,14 @@
+# --- Stage 1: Webcam + Face Detection ---
+opencv-python>=4.8.0
+numpy>=1.24.0
+streamlit>=1.32.0
+python-dotenv>=1.0.0
+
+# --- Stage 3: Liveness model training/inference ---
+torch>=2.1.0
+torchvision>=0.16.0
+Pillow>=10.0.0
+
+# --- Stage 4: Evaluation ---
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
