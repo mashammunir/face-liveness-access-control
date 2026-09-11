@@ -1,5 +1,5 @@
 # --- Stage 1: Webcam + Face Detection ---
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 numpy>=1.24.0
 streamlit>=1.32.0
 python-dotenv>=1.0.0
