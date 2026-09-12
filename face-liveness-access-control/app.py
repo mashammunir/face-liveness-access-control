@@ -94,64 +94,49 @@ with tab_dashboard:
             f"incomplete: {st.session_state['db_error']}"
         )
 
-    run = st.toggle("▶️ Start camera", value=False, key="dashboard_run")
+    st.markdown("Take a photo to run it through the access control pipeline.")
+    dashboard_photo = st.camera_input("Take a photo to verify", key="dashboard_photo")
 
     cam_col, status_col = st.columns([3, 2], gap="large")
 
-    with cam_col:
-        frame_placeholder = st.empty()
-        if not run:
-            frame_placeholder.info("Camera is off. Toggle 'Start camera' above to begin.")
+    if dashboard_photo is None:
+        with status_col:
+            card = st.container(border=True)
+            with card:
+                st.markdown("#### System Status")
+                st.metric("Face", "—")
+                st.metric("Liveness", "—")
+                st.metric("Identity", "—")
+                st.info("Waiting for a photo...")
+    else:
+        file_bytes = np.frombuffer(dashboard_photo.getvalue(), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    with status_col:
-        card = st.container(border=True)
-        with card:
-            st.markdown("#### System Status")
-            face_status_placeholder = st.empty()
-            st.divider()
-            liveness_label_placeholder = st.empty()
-            liveness_bar_placeholder = st.empty()
-            st.divider()
-            identity_label_placeholder = st.empty()
-            identity_bar_placeholder = st.empty()
-            st.divider()
-            access_placeholder = st.empty()
-
-        if not run:
-            face_status_placeholder.metric("Face", "—")
-            liveness_label_placeholder.metric("Liveness", "—")
-            identity_label_placeholder.metric("Identity", "—")
-            access_placeholder.info("Waiting for camera...")
-
-    if run:
-        cap = cv2.VideoCapture(config.CAMERA_INDEX)
-
-        if not cap.isOpened():
-            st.error(
-                f"Could not open camera at index {config.CAMERA_INDEX}. "
-                "Check that a webcam is connected, not in use by another "
-                "application, and that camera permissions are granted."
-            )
+        if frame is None:
+            st.error("Could not read the captured photo. Please try again.")
         else:
-            try:
-                while run:
-                    ok, frame = cap.read()
-                    if not ok or frame is None:
-                        face_status_placeholder.warning("Failed to read a frame from the camera.")
-                        break
+            boxes = detector.detect_faces(frame)
 
-                    boxes = detector.detect_faces(frame)
+            with cam_col:
+                if boxes:
+                    annotated = draw_faces(frame, boxes, label="Detected")
+                    st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
+                else:
+                    st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+            with status_col:
+                card = st.container(border=True)
+                with card:
+                    st.markdown("#### System Status")
 
                     if not boxes:
-                        annotated_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frame_placeholder.image(annotated_rgb, channels="RGB", use_container_width=True)
-                        face_status_placeholder.metric("Face", "Not detected")
-                        liveness_label_placeholder.metric("Liveness", "—")
-                        liveness_bar_placeholder.empty()
-                        identity_label_placeholder.metric("Identity", "—")
-                        identity_bar_placeholder.empty()
-                        access_placeholder.info("No face in frame — waiting...")
+                        st.metric("Face", "Not detected")
+                        st.metric("Liveness", "—")
+                        st.metric("Identity", "—")
+                        st.info("No face in frame.")
                     else:
+                        st.metric("Face", f"Detected ({len(boxes)})")
+
                         primary_box = boxes[0]
                         face_crop = crop_face(frame, primary_box)
 
@@ -160,16 +145,8 @@ with tab_dashboard:
                             try:
                                 label, confidence = liveness_detector.predict(face_crop)
                             except ValueError as e:
-                                # Defense-in-depth: predict() validates its
-                                # own input, but a validation failure here
-                                # must not crash the live camera loop — it
-                                # just means this frame is inconclusive.
-                                st.session_state["db_error"] = f"Liveness check skipped for this frame: {e}"
-                                label, confidence = None, None
+                                st.session_state["db_error"] = f"Liveness check skipped: {e}"
 
-                        # SECURITY RULE: identity is only ever checked when
-                        # the face has passed the liveness check. A SPOOF
-                        # frame never gets a recognition attempt.
                         recognized_name, match_score = None, 0.0
                         if label == "LIVE" and embedding_extractor.available and face_crop is not None:
                             query_embedding = embedding_extractor.embed(face_crop)
@@ -177,24 +154,8 @@ with tab_dashboard:
                                 known_embeddings = user_db.get_all_active_embeddings()
                                 recognized_name, match_score = match_embedding(query_embedding, known_embeddings)
                             except DatabaseError as e:
-                                # Fail closed: if we can't read the user
-                                # registry, treat this frame as Unknown
-                                # rather than crash the live loop or skip
-                                # the liveness gate.
                                 st.session_state["db_error"] = str(e)
-                                recognized_name, match_score = None, 0.0
 
-                        box_label = label if label else "Detected"
-                        if label == "LIVE":
-                            box_label = recognized_name if recognized_name else "LIVE - Unknown"
-                        annotated = draw_faces(frame, boxes, label=box_label)
-                        annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                        frame_placeholder.image(annotated_rgb, channels="RGB", use_container_width=True)
-
-                        face_status_placeholder.metric("Face", f"Detected ({len(boxes)})")
-
-                        # Apply the single source-of-truth access-control
-                        # rule, then log every attempt (granted or denied).
                         decision = decide_access(
                             liveness_label=label,
                             liveness_confidence=confidence or 0.0,
@@ -211,47 +172,31 @@ with tab_dashboard:
                                 access_result=decision.access_result,
                             )
                         except DatabaseError as e:
-                            # A logging failure must never block or alter
-                            # the access decision already made above — it
-                            # only means this attempt won't appear in the
-                            # Access Logs tab. Surface it without crashing
-                            # the live camera loop.
                             st.session_state["db_error"] = str(e)
 
-
                         if label == "LIVE":
-                            liveness_label_placeholder.metric("Liveness", "LIVE", delta="✓ passed", delta_color="normal")
-                            liveness_bar_placeholder.progress(min(1.0, max(0.0, confidence)), text=f"Confidence: {confidence * 100:.1f}%")
-
+                            st.metric("Liveness", "LIVE", delta="passed", delta_color="normal")
+                            st.progress(min(1.0, max(0.0, confidence)), text=f"Confidence: {confidence * 100:.1f}%")
                             if not embedding_extractor.available:
-                                identity_label_placeholder.metric("Identity", "Unavailable")
-                                identity_bar_placeholder.empty()
+                                st.metric("Identity", "Unavailable")
                             elif recognized_name:
-                                identity_label_placeholder.metric("Identity", recognized_name, delta="✓ match", delta_color="normal")
-                                identity_bar_placeholder.progress(min(1.0, max(0.0, match_score)), text=f"Match: {match_score * 100:.1f}%")
+                                st.metric("Identity", recognized_name, delta="match", delta_color="normal")
+                                st.progress(min(1.0, max(0.0, match_score)), text=f"Match: {match_score * 100:.1f}%")
                             else:
-                                identity_label_placeholder.metric("Identity", "Unknown", delta="✗ no match", delta_color="inverse")
-                                identity_bar_placeholder.progress(min(1.0, max(0.0, match_score)), text=f"Best match: {match_score * 100:.1f}%")
+                                st.metric("Identity", "Unknown", delta="no match", delta_color="inverse")
                         elif label == "SPOOF":
-                            liveness_label_placeholder.metric("Liveness", "SPOOF", delta="✗ failed", delta_color="inverse")
-                            liveness_bar_placeholder.progress(min(1.0, max(0.0, confidence)), text=f"Confidence: {confidence * 100:.1f}%")
-                            identity_label_placeholder.metric("Identity", "--")
-                            identity_bar_placeholder.caption("Skipped — liveness check failed")
+                            st.metric("Liveness", "SPOOF", delta="failed", delta_color="inverse")
+                            st.progress(min(1.0, max(0.0, confidence)), text=f"Confidence: {confidence * 100:.1f}%")
+                            st.metric("Identity", "--")
+                            st.caption("Skipped — liveness check failed")
                         else:
-                            liveness_label_placeholder.metric("Liveness", "Inconclusive")
-                            liveness_bar_placeholder.empty()
-                            identity_label_placeholder.metric("Identity", "—")
-                            identity_bar_placeholder.empty()
+                            st.metric("Liveness", "Inconclusive")
+                            st.metric("Identity", "—")
 
                         if decision.access_result == GRANTED:
-                            access_placeholder.success(f"## ✅ ACCESS GRANTED\n**Welcome, {decision.user_name}**")
+                            st.success(f"## ✅ ACCESS GRANTED\n**Welcome, {decision.user_name}**")
                         else:
-                            access_placeholder.error("## ⛔ ACCESS DENIED")
-
-                    run = st.session_state.get("dashboard_run", run)
-            finally:
-                cap.release()
-
+                            st.error("## ⛔ ACCESS DENIED")
 # --------------------------------------------------------------------------
 # REGISTER USER TAB — capture a face snapshot, extract embedding, store it
 # --------------------------------------------------------------------------
