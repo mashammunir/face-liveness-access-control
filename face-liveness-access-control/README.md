@@ -496,9 +496,14 @@ SQLite databases). Coverage includes:
 - Registration's handling of undecodable/corrupt image bytes (mirrors
   the exact `cv2.imdecode` → `detect_faces` call sequence in `app.py`).
 
-## Team / contributors
+## Team / contributions
+- Syeda Aliya Fatima — Vision & Detection
+- Muhammad Shahzaib — Liveness / ML
+- Masham Munir — Recognition & Data
+- Asma Mushtaq — Access Control & Backend
+- Yusra Arshad — App, QA & Docs
 
-Built as a hackathon project. (Add your name(s) and roles here.)
+
 
 ---
 
